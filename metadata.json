@@ -1,0 +1,7 @@
+{
+  "name": "AudioFX ELITE",
+  "description": "A professional-grade real-time audio reverb processor with three distinct algorithmic engines (Lexicon, Bricasti, TC Electronic), spectral visualization, and Gemini-powered acoustic modeling.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
