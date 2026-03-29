@@ -139,7 +139,113 @@ class AudioEngine {
 
   startRecording() {}
   async stopRecording() { return new Blob(); }
-  async renderOffline(_file: File, _settings: AudioSettings) { return new Blob(); }
+
+  async renderOffline(file: File, settings: AudioSettings): Promise<Blob> {
+    // OfflineAudioContextはAudioWorkletが使えないため
+    // リアルタイムレンダリング方式: MediaStreamDestination → MediaRecorder → WebM → WAV変換
+    const arrayBuf = await file.arrayBuffer();
+
+    // 一時的なAudioContextを作成
+    const offCtx = new AudioContext({ sampleRate: 48000 });
+    await offCtx.audioWorklet.addModule('/reverb-processor.js');
+
+    const revNode = new AudioWorkletNode(offCtx, 'reverb-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: 'explicit'
+    });
+
+    // WASM初期化を待つ
+    await new Promise<void>((resolve) => {
+      revNode.port.onmessage = (e) => { if (e.data.type === 'READY') resolve(); };
+      fetch('/reverb_combined.wasm').then(r => r.arrayBuffer()).then(wasm => {
+        revNode.port.postMessage({ type: 'INIT', wasmBinary: wasm }, [wasm]);
+      });
+    });
+
+    // パラメータ適用
+    revNode.port.postMessage({ type: 'APPLY_ALL', settings });
+
+    // オーディオバッファをデコード
+    const audioBuf = await offCtx.decodeAudioData(arrayBuf);
+    const duration = audioBuf.duration;
+
+    // MediaStreamDestinationに接続
+    const dest = offCtx.createMediaStreamDestination();
+    const src = offCtx.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(revNode);
+    revNode.connect(dest);
+    src.start(0);
+
+    // MediaRecorderで録音
+    const recorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+    const recorded = new Promise<Blob>((resolve) => {
+      recorder.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
+    });
+
+    recorder.start();
+    await new Promise(r => setTimeout(r, duration * 1000 + 500)); // 末尾の残響分+500ms
+    recorder.stop();
+    src.stop();
+
+    const webmBlob = await recorded;
+    await offCtx.close();
+
+    // WebMをWAVに変換（AudioContextで再デコード → WAVエンコード）
+    const webmBuf = await webmBlob.arrayBuffer();
+    const decCtx = new AudioContext({ sampleRate: 48000 });
+    const decoded = await decCtx.decodeAudioData(webmBuf);
+    await decCtx.close();
+
+    return this._encodeWav(decoded);
+  }
+
+  private _encodeWav(buffer: AudioBuffer): Blob {
+    const numCh = buffer.numberOfChannels;
+    const numSamples = buffer.length;
+    const sampleRate = buffer.sampleRate;
+    const bytesPerSample = 2; // 16bit
+    const dataSize = numCh * numSamples * bytesPerSample;
+    const wavBuf = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(wavBuf);
+
+    const write = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    const writeU32 = (o: number, v: number) => view.setUint32(o, v, true);
+    const writeU16 = (o: number, v: number) => view.setUint16(o, v, true);
+
+    write(0, 'RIFF');
+    writeU32(4, 36 + dataSize);
+    write(8, 'WAVE');
+    write(12, 'fmt ');
+    writeU32(16, 16);
+    writeU16(20, 1); // PCM
+    writeU16(22, numCh);
+    writeU32(24, sampleRate);
+    writeU32(28, sampleRate * numCh * bytesPerSample);
+    writeU16(32, numCh * bytesPerSample);
+    writeU16(34, 16);
+    write(36, 'data');
+    writeU32(40, dataSize);
+
+    let offset = 44;
+    for (let i = 0; i < numSamples; i++) {
+      for (let ch = 0; ch < numCh; ch++) {
+        const s = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+        view.setInt16(offset, s < 0 ? s * 32768 : s * 32767, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([wavBuf], { type: 'audio/wav' });
+  }
 
   async close() {
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
