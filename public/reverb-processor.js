@@ -9,6 +9,10 @@ class ReverbProcessor extends AudioWorkletProcessor {
     this._exports = null;
     this._BLOCK = 128;
 
+    this._capturing = false;
+    this._captureChunksL = [];
+    this._captureChunksR = [];
+
     this.port.onmessage = (e) => {
       if (e.data.type === 'INIT') {
         this._initWasm(e.data.wasmBinary);
@@ -18,6 +22,24 @@ class ReverbProcessor extends AudioWorkletProcessor {
         try { this._exports['q'](0, e.data.v); } catch(_) {}
       } else if (e.data.type === 'APPLY_ALL' && this._ready) {
         this._applyAll(e.data.settings);
+      } else if (e.data.type === 'CAPTURE_START') {
+        this._captureChunksL = [];
+        this._captureChunksR = [];
+        this._capturing = true;
+      } else if (e.data.type === 'CAPTURE_STOP') {
+        this._capturing = false;
+        const totalLen = this._captureChunksL.reduce((s, c) => s + c.length, 0);
+        const L = new Float32Array(totalLen);
+        const R = new Float32Array(totalLen);
+        let offset = 0;
+        for (let i = 0; i < this._captureChunksL.length; i++) {
+          L.set(this._captureChunksL[i], offset);
+          R.set(this._captureChunksR[i], offset);
+          offset += this._captureChunksL[i].length;
+        }
+        this._captureChunksL = [];
+        this._captureChunksR = [];
+        this.port.postMessage({ type: 'CAPTURE_DATA', L, R }, [L.buffer, R.buffer]);
       }
     };
   }
@@ -117,6 +139,12 @@ class ReverbProcessor extends AudioWorkletProcessor {
       this._exports['r'](this._inPtr, this._outPtr, len);
       oL.set(H.subarray(lb, lb + len));
       if (oR !== oL) oR.set(H.subarray(rb, rb + len));
+
+      // キャプチャ中は出力をコピーして蓄積
+      if (this._capturing) {
+        this._captureChunksL.push(new Float32Array(oL));
+        this._captureChunksR.push(new Float32Array(oR !== oL ? oR : oL));
+      }
     } catch(e) {
       oL.set(iL); if (oR !== oL) oR.set(iR);
     }

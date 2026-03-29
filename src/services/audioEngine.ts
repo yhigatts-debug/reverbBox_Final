@@ -141,11 +141,9 @@ class AudioEngine {
   async stopRecording() { return new Blob(); }
 
   async renderOffline(file: File, settings: AudioSettings): Promise<Blob> {
-    // OfflineAudioContextはAudioWorkletが使えないため
-    // リアルタイムレンダリング方式: MediaStreamDestination → MediaRecorder → WebM → WAV変換
     const arrayBuf = await file.arrayBuffer();
 
-    // 一時的なAudioContextを作成
+    // 一時AudioContextを作成
     const offCtx = new AudioContext({ sampleRate: 48000 });
     await offCtx.audioWorklet.addModule('/reverb-processor.js');
 
@@ -171,8 +169,19 @@ class AudioEngine {
     // オーディオバッファをデコード
     const audioBuf = await offCtx.decodeAudioData(arrayBuf);
     const duration = audioBuf.duration;
+    const tailSec = Math.min(settings.reverbDuration + 0.5, 12); // 残響末尾を追加
 
-    // MediaStreamDestinationに接続
+    // キャプチャ開始
+    revNode.port.postMessage({ type: 'CAPTURE_START' });
+
+    // 生PCMデータを受け取るPromise
+    const captureData = new Promise<{ L: Float32Array; R: Float32Array }>((resolve) => {
+      revNode.port.onmessage = (e) => {
+        if (e.data.type === 'CAPTURE_DATA') resolve({ L: e.data.L, R: e.data.R });
+      };
+    });
+
+    // ダミー出力に接続して再生
     const dest = offCtx.createMediaStreamDestination();
     const src = offCtx.createBufferSource();
     src.buffer = audioBuf;
@@ -180,36 +189,20 @@ class AudioEngine {
     revNode.connect(dest);
     src.start(0);
 
-    // MediaRecorderで録音
-    const recorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    // ファイル長 + 残響末尾分を待ってキャプチャ停止
+    await new Promise(r => setTimeout(r, (duration + tailSec) * 1000));
+    revNode.port.postMessage({ type: 'CAPTURE_STOP' });
 
-    const recorded = new Promise<Blob>((resolve) => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
-    });
-
-    recorder.start();
-    await new Promise(r => setTimeout(r, duration * 1000 + 500)); // 末尾の残響分+500ms
-    recorder.stop();
+    const { L, R } = await captureData;
     src.stop();
-
-    const webmBlob = await recorded;
     await offCtx.close();
 
-    // WebMをWAVに変換（AudioContextで再デコード → WAVエンコード）
-    const webmBuf = await webmBlob.arrayBuffer();
-    const decCtx = new AudioContext({ sampleRate: 48000 });
-    const decoded = await decCtx.decodeAudioData(webmBuf);
-    await decCtx.close();
-
-    return this._encodeWav(decoded);
+    return this._encodeWav(L, R, 48000);
   }
 
-  private _encodeWav(buffer: AudioBuffer): Blob {
-    const numCh = buffer.numberOfChannels;
-    const numSamples = buffer.length;
-    const sampleRate = buffer.sampleRate;
+  private _encodeWav(L: Float32Array, R: Float32Array, sampleRate: number): Blob {
+    const numCh = 2;
+    const numSamples = L.length;
     const bytesPerSample = 2; // 16bit
     const dataSize = numCh * numSamples * bytesPerSample;
     const wavBuf = new ArrayBuffer(44 + dataSize);
@@ -218,30 +211,28 @@ class AudioEngine {
     const write = (offset: number, str: string) => {
       for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
     };
-    const writeU32 = (o: number, v: number) => view.setUint32(o, v, true);
-    const writeU16 = (o: number, v: number) => view.setUint16(o, v, true);
 
     write(0, 'RIFF');
-    writeU32(4, 36 + dataSize);
+    view.setUint32(4, 36 + dataSize, true);
     write(8, 'WAVE');
     write(12, 'fmt ');
-    writeU32(16, 16);
-    writeU16(20, 1); // PCM
-    writeU16(22, numCh);
-    writeU32(24, sampleRate);
-    writeU32(28, sampleRate * numCh * bytesPerSample);
-    writeU16(32, numCh * bytesPerSample);
-    writeU16(34, 16);
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, numCh, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numCh * bytesPerSample, true);
+    view.setUint16(32, numCh * bytesPerSample, true);
+    view.setUint16(34, 16, true);
     write(36, 'data');
-    writeU32(40, dataSize);
+    view.setUint32(40, dataSize, true);
 
     let offset = 44;
     for (let i = 0; i < numSamples; i++) {
-      for (let ch = 0; ch < numCh; ch++) {
-        const s = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
-        view.setInt16(offset, s < 0 ? s * 32768 : s * 32767, true);
-        offset += 2;
-      }
+      const l = Math.max(-1, Math.min(1, L[i]));
+      const r = Math.max(-1, Math.min(1, R[i]));
+      view.setInt16(offset,     l < 0 ? l * 32768 : l * 32767, true);
+      view.setInt16(offset + 2, r < 0 ? r * 32768 : r * 32767, true);
+      offset += 4;
     }
 
     return new Blob([wavBuf], { type: 'audio/wav' });
