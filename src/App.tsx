@@ -109,7 +109,7 @@ useEffect(() => {
   const algoLocksRef = useRef<Record<string, boolean>>({
     lexicon: false, bricasti: false, tcelectronic: false
   });
-
+  const justSwitchedEngine = useRef(false);
   const isUnstable = settings.reverbDuration >= 9.9;
   // Bricasti M7: APディフューザー構造的フロアにより RT60 < 0.8s はエミュレータ上実現不可
   // （実機M7は0.2sまで設定可能だが、本エミュレータでは~750msが下限）
@@ -179,16 +179,20 @@ useEffect(() => {
   }, []);
 
   // SMP連動：Lock解除中は全パラメータ（共通項+専用項）を更新
-  useEffect(() => {
-    const mode = settings.algoMode;
-    if (algoLocksRef.current[mode]) return; // Lock中はスキップ
-    const physics = calculateLocalParams(dims, listenerY, mode);
-    setSettings(prev => {
-      const next = { ...prev, ...physics };
-      setTimeout(() => audioEngine.updateSettings(next), 0);
-      return next;
-    });
-  }, [dims, listenerY, settings.algoMode, calculateLocalParams]);
+   useEffect(() => {
+      if (justSwitchedEngine.current) {
+        justSwitchedEngine.current = false;
+        return;
+      }
+      const mode = settings.algoMode;
+      if (algoLocksRef.current[mode]) return;
+      const physics = calculateLocalParams(dims, listenerY, mode);
+      setSettings(prev => {
+        const next = { ...prev, ...physics };
+        setTimeout(() => audioEngine.updateSettings(next), 0);
+       return next;
+      });
+    }, [dims, listenerY, settings.algoMode, calculateLocalParams]);
 
   useEffect(() => {
     navigator.mediaDevices.getUserMedia({ audio: true })
@@ -558,6 +562,7 @@ useEffect(() => {
     setTimeout(() => audioEngine.updateSettings(next), 0);
     return next;
   });
+  justSwitchedEngine.current = true;
   audioEngine.setAlgo(m);
 }}
                   className={`py-4 rounded-xl border-2 transition-all uppercase text-[10px] font-black flex flex-col items-center justify-center gap-0.5 ${settings.algoMode === m ? 'bg-white/10 border-current shadow-lg' : 'bg-transparent border-white/5 text-slate-600'}`}

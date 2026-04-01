@@ -134,7 +134,8 @@ class AudioEngine {
   }
 
   resetDSP() {
-    this.reverbNode?.port.postMessage({ type: 'ALGO', v: 1 });
+    const modeId = algoModeToId(this.currentAlgoMode);
+    this.reverbNode?.port.postMessage({ type: 'ALGO', v: modeId });
   }
 
   startRecording() {}
