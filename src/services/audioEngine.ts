@@ -73,6 +73,13 @@ class AudioEngine {
         this.stream = tmpStream;
       }
 
+      // サンプルレートを44.1kHzまたは48kHzに制限
+      const allowedRates = [44100, 48000];
+      if (!allowedRates.includes(detectedSampleRate)) {
+        console.log(`[AudioEngine] Sample rate ${detectedSampleRate}Hz not supported, falling back to 48000Hz`);
+        detectedSampleRate = 48000;
+      }
+
       this.ctx = new AudioContext({ sampleRate: detectedSampleRate });
       if (this.ctx.state === 'suspended') await this.ctx.resume();
 
@@ -222,7 +229,8 @@ class AudioEngine {
     // 一時AudioContextでファイルのサンプルレートを検出
     const tmpCtx = new AudioContext();
     const tmpBuf = await tmpCtx.decodeAudioData(arrayBuf.slice(0));
-    const fileSampleRate = tmpBuf.sampleRate;
+    const allowedRates = [44100, 48000];
+    const fileSampleRate = allowedRates.includes(tmpBuf.sampleRate) ? tmpBuf.sampleRate : 48000;
     await tmpCtx.close();
 
     // 検出したサンプルレートでAudioContextを作成
