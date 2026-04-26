@@ -167,8 +167,54 @@ class AudioEngine {
     this.reverbNode?.port.postMessage({ type: 'ALGO', v: modeId });
   }
 
-  startRecording() {}
-  async stopRecording() { return new Blob(); }
+  private recordingChunksL: Float32Array[] = [];
+  private recordingChunksR: Float32Array[] = [];
+  private isRecording: boolean = false;
+
+  startRecording() {
+    if (!this.reverbNode) return;
+    this.recordingChunksL = [];
+    this.recordingChunksR = [];
+    this.isRecording = true;
+
+    // Workletからのキャプチャデータを受け取るハンドラを追加
+    const originalHandler = this.reverbNode.port.onmessage;
+    this.reverbNode.port.onmessage = (e) => {
+      if (originalHandler) (originalHandler as any)(e);
+      if (e.data.type === 'CAPTURE_CHUNK') {
+        this.recordingChunksL.push(e.data.L);
+        this.recordingChunksR.push(e.data.R);
+      }
+    };
+
+    this.reverbNode.port.postMessage({ type: 'CAPTURE_START' });
+  }
+
+  async stopRecording(): Promise<Blob> {
+    if (!this.reverbNode || !this.isRecording) return new Blob();
+    this.isRecording = false;
+
+    const captureData = new Promise<{ L: Float32Array; R: Float32Array }>((resolve) => {
+      const originalHandler = this.reverbNode!.port.onmessage;
+      this.reverbNode!.port.onmessage = (e) => {
+        if (e.data.type === 'CAPTURE_DATA') {
+          resolve({ L: e.data.L, R: e.data.R });
+          // ハンドラを元に戻す
+          this.reverbNode!.port.onmessage = (e) => {
+            if (e.data.type === 'READY') { this.workletReady = true; }
+            else if (e.data.type === 'ERROR') { console.error('[AudioEngine] Worklet error:', e.data.msg); }
+          };
+        } else if (originalHandler) {
+          (originalHandler as any)(e);
+        }
+      };
+    });
+
+    this.reverbNode.port.postMessage({ type: 'CAPTURE_STOP' });
+    const { L, R } = await captureData;
+
+    return this._encodeWav(L, R, this.ctx?.sampleRate ?? 48000);
+  }
 
   async renderOffline(file: File, settings: AudioSettings): Promise<Blob> {
     const arrayBuf = await file.arrayBuffer();
