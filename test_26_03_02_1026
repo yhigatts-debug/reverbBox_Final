@@ -1,0 +1,25 @@
+OmniTone>AudioFX Elite BH 2ch in 複数出力（BH16, Headphone）out＞omniTone BH16
+  Base line 15mL x 10mW x 6mH center listener setting and lock
+  Master, Dry Gin, Wet gain, RT60, Pre-Delay, Lo-Cut, High-Cut, 
+  1.000,  0.645,   0.484,    1.608s, 0.119s,  80Hz,   12000Hz
+  SPIN, WANDER, BASS MULTI
+  0.125, 0.150, 0.850
+  DEVSITY, ROOM SIZE, V-ROLL(HZ)
+  0.650,   1.000,     11200
+  AIR QUALITY, ER/TAIL BALANCE, HI-DAMPING
+  0.600,       0.463,           0.292
+
+Lexicon, Brigasti, TC  Based on same slider value of the others. 
+  Wet 0, Dry 1.000
+         Dry 0.500 Master 2.000  
+         Dry 0.500 Master 1.000
+         Dry 0.000
+         
+  Dry 0  Wet 1.000
+         Wet 1.500
+  
+// TC 高周波落ち High Cut1000Hzで落ち解消   V13　　了
+// Lexi Drumなど遅れあり。Low Cutで解消せず。V13   252ms vs 164ms 
+// Pre-Dlay を動かしても反響音シェイプの場所は変わらない
+// DRYを上げるとWetは下がっていくと同時にRT60も下がる  早退表示か？
+// Wet 1.0とDry 1.0は同じだろうか？１番近い・遠いところのDRY/WET 

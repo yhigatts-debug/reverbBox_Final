@@ -47,7 +47,33 @@ class AudioEngine {
     try {
       if (this.ctx) await this.close();
 
-      this.ctx = new AudioContext({ sampleRate: 48000 });
+      // サンプルレートを入力ソースから自動検出
+      let detectedSampleRate = 48000;
+
+      if (file) {
+        // ファイルの場合：一時AudioContextでデコードしてサンプルレートを取得
+        const tmpCtx = new AudioContext();
+        const tmpBuf = await tmpCtx.decodeAudioData(await file.arrayBuffer());
+        detectedSampleRate = tmpBuf.sampleRate;
+        await tmpCtx.close();
+        console.log(`[AudioEngine] File sample rate: ${detectedSampleRate}Hz`);
+      } else {
+        // マイク入力の場合：getUserMediaで取得したトラックの設定から読む
+        const tmpStream = await navigator.mediaDevices.getUserMedia({
+          audio: inputDeviceId
+            ? { deviceId: { exact: inputDeviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+            : { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+        const track = tmpStream.getAudioTracks()[0];
+        const settings = track.getSettings();
+        if (settings.sampleRate) {
+          detectedSampleRate = settings.sampleRate;
+          console.log(`[AudioEngine] Device sample rate: ${detectedSampleRate}Hz`);
+        }
+        this.stream = tmpStream;
+      }
+
+      this.ctx = new AudioContext({ sampleRate: detectedSampleRate });
       if (this.ctx.state === 'suspended') await this.ctx.resume();
 
       // AudioWorkletモジュール登録
@@ -88,12 +114,15 @@ class AudioEngine {
         bSource.start();
         this.source = bSource;
       } else {
-        const constraints: MediaStreamConstraints = {
-          audio: inputDeviceId
-            ? { deviceId: { exact: inputDeviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-            : { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        };
-        this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+        // マイク入力：サンプルレート検出時に取得済みのストリームを再利用
+        if (!this.stream) {
+          const constraints: MediaStreamConstraints = {
+            audio: inputDeviceId
+              ? { deviceId: { exact: inputDeviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+              : { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          };
+          this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+        }
         this.source = this.ctx.createMediaStreamSource(this.stream);
       }
 
@@ -144,8 +173,14 @@ class AudioEngine {
   async renderOffline(file: File, settings: AudioSettings): Promise<Blob> {
     const arrayBuf = await file.arrayBuffer();
 
-    // 一時AudioContextを作成
-    const offCtx = new AudioContext({ sampleRate: 48000 });
+    // 一時AudioContextでファイルのサンプルレートを検出
+    const tmpCtx = new AudioContext();
+    const tmpBuf = await tmpCtx.decodeAudioData(arrayBuf.slice(0));
+    const fileSampleRate = tmpBuf.sampleRate;
+    await tmpCtx.close();
+
+    // 検出したサンプルレートでAudioContextを作成
+    const offCtx = new AudioContext({ sampleRate: fileSampleRate });
     await offCtx.audioWorklet.addModule('/reverb-processor.js');
 
     const revNode = new AudioWorkletNode(offCtx, 'reverb-processor', {
@@ -198,7 +233,7 @@ class AudioEngine {
     src.stop();
     await offCtx.close();
 
-    return this._encodeWav(L, R, 48000);
+    return this._encodeWav(L, R, fileSampleRate);
   }
 
   private _encodeWav(L: Float32Array, R: Float32Array, sampleRate: number): Blob {
