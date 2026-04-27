@@ -292,7 +292,7 @@ useEffect(() => {
     if (isRecording) {
       const blob = await audioEngine.stopRecording();
       const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const timestamp = new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().replace(/[:.]/g, '-').slice(0, 19);
       
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -308,7 +308,7 @@ useEffect(() => {
 
   const handleSavePreset = () => {
     const now = new Date();
-    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const timestamp = new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const { isProcessing, ...presetData } = settings;
     const blob = new Blob([JSON.stringify(presetData, null, 2)], {type: 'application/json'});
     const a = document.createElement('a');
