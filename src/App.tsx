@@ -297,7 +297,7 @@ useEffect(() => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `AudioFX_Record_${timestamp}.webm`;
+      a.download = `AudioFX_Record_${timestamp}.wav`;
       a.click();
       setIsRecording(false);
     } else {
